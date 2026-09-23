@@ -15,12 +15,26 @@ export function createApp() {
 
   app.use(helmet())
 
-  // Allow no-origin callers (the native app sends no Origin header) but restrict
-  // browsers to the configured list.
+  /*
+   * Allow no-origin callers (the native app sends no Origin header) and, for
+   * browsers, only the configured list.
+   *
+   * There used to be an `env.corsOrigins.length === 0` clause here that said
+   * "allow everyone". It read like a convenience default but it FAILED OPEN:
+   * with CORS_ORIGINS unset — which is the state of any fresh deployment — every
+   * website on the internet was permitted to call this API from a browser. That
+   * was survivable while the server only ever listened on a home LAN; it is not
+   * once it has a public hostname.
+   *
+   * Dropping the clause costs nothing, because the only real client is the
+   * native app and it is covered by `!origin`. So an unset CORS_ORIGINS now
+   * means "no browser may call this", which is the correct default for an API
+   * with no web client at all (the product is mobile-native — CLAUDE.md §9).
+   */
   app.use(
     cors({
       origin(origin, cb) {
-        if (!origin || env.corsOrigins.length === 0 || env.corsOrigins.includes(origin)) return cb(null, true)
+        if (!origin || env.corsOrigins.includes(origin)) return cb(null, true)
         cb(new Error('Not allowed by CORS'))
       },
       credentials: true,
