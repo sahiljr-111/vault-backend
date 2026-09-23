@@ -42,6 +42,18 @@ export const env = {
    */
   otpDevEcho: process.env.NODE_ENV !== 'production' && process.env.OTP_DEV_ECHO === '1',
   corsOrigins: (process.env.CORS_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean),
+  /**
+   * HTTPS email provider, used INSTEAD of SMTP when a key is present.
+   *
+   * Needed because some hosts (Render's free tier among them) block outbound
+   * SMTP ports entirely. `from` falls back to the SMTP sender so a deployment
+   * that already had one does not need a second copy of the same address.
+   */
+  mail: {
+    provider: process.env.MAIL_PROVIDER,        // 'brevo' | 'resend'
+    apiKey: process.env.MAIL_API_KEY,
+    from: process.env.MAIL_FROM || process.env.SMTP_FROM || process.env.SMTP_USER,
+  },
   smtp: {
     host: process.env.SMTP_HOST,
     port: Number(process.env.SMTP_PORT) || 587,
