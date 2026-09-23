@@ -7,6 +7,7 @@ import {
   authLimiter,
   mailLimiterPerIp,
   mailLimiterPerEmail,
+  mailLimiterPerUser,
   otpVerifyLimiter,
 } from '../middlewares/rate-limit.middleware.js'
 
@@ -60,10 +61,15 @@ router.post('/refresh', authLimiter, validate(refreshBody), authController.refre
 /*
  * Rule 8 — a code is a credential, so both halves are limited even though they
  * already require a session: `request` costs real mail, and `confirm` is a
- * guessing oracle. The per-IP mail limiter sits in front of the send, and the
- * OTP verify limiter in front of the check, exactly as on the signup pair.
+ * guessing oracle.
+ *
+ * The send is limited PER USER, not per IP. Per IP it fired almost immediately
+ * in normal use — the screen gave no sign a request was in flight, so people
+ * tapped again, and ten taps from one phone exhausted a budget meant to cover a
+ * whole address. It was also the wrong shape for an authenticated route; see
+ * mailLimiterPerUser.
  */
-router.post('/pin-reset/request', requireAuth, mailLimiterPerIp, authController.requestPinReset)
+router.post('/pin-reset/request', requireAuth, mailLimiterPerUser, authController.requestPinReset)
 router.post('/pin-reset/confirm', requireAuth, otpVerifyLimiter, validate(codeOnly), authController.confirmPinReset)
 
 router.post('/vault/init', requireAuth, validate(vaultInit), authController.initializeVault)

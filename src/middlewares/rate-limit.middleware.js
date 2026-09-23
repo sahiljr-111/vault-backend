@@ -69,6 +69,30 @@ export const mailLimiterPerIp = rateLimit({
   keyGenerator: ipKey,
 })
 
+/**
+ * Mail limiter for routes that already require a session.
+ *
+ * Keyed by USER, not IP. On an authenticated route the IP is the wrong key
+ * twice over: it is too coarse, because every customer behind one carrier NAT
+ * or one hosting proxy shares a single budget and can exhaust it for the
+ * others, and it is unnecessary, because the enumeration attack the IP key
+ * defends against needs an email PARAMETER to probe with — and these routes
+ * take the account from the token instead.
+ *
+ * This is a backstop, not the real control. The precise limits live in
+ * issueOtp: a per-user cooldown between codes and a hard resend cap, both of
+ * which give the caller a specific "wait Ns" rather than a flat refusal.
+ */
+export const mailLimiterPerUser = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message,
+  skipSuccessfulRequests: false,
+  keyGenerator: (req) => req.user?.id ?? ipKey(req),
+})
+
 export const mailLimiterPerEmail = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 5,
