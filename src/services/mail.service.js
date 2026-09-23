@@ -48,19 +48,39 @@ export async function sendOtpEmail({ to, code, ttlMinutes }) {
     throw badRequest('Email is not configured on this server.', 'SMTP_NOT_CONFIGURED')
   }
 
-  await tx.sendMail({
-    from: env.smtp.from || env.smtp.user,
-    to,
-    subject: `${code} is your Personal Vault code`,
-    text: [
-      `Your verification code is ${code}`,
-      '',
-      `It expires in ${ttlMinutes} minutes and can be used once.`,
-      '',
-      "If you didn't ask for this, you can ignore this email — nobody can get in",
-      'with the code alone.',
-    ].join('\n'),
-  })
+  try {
+    await tx.sendMail({
+      from: env.smtp.from || env.smtp.user,
+      to,
+      subject: `${code} is your Personal Vault code`,
+      text: [
+        `Your verification code is ${code}`,
+        '',
+        `It expires in ${ttlMinutes} minutes and can be used once.`,
+        '',
+        "If you didn't ask for this, you can ignore this email — nobody can get in",
+        'with the code alone.',
+      ].join('\n'),
+    })
+  } catch (e) {
+    /*
+     * A transport failure is NOT "something went wrong".
+     *
+     * Uncaught, this surfaced as a bare 500 and the app said "Something went
+     * wrong. Please try again." — which sent the user round the same loop with
+     * nothing to act on, because retrying cannot fix a revoked app password or
+     * a blocked port.
+     *
+     * Only the transport's own code is logged (EAUTH, ECONNECTION, ETIMEDOUT
+     * and friends). Never the message, which can echo back the envelope, and
+     * never the credentials or the code itself (rule 3).
+     */
+    logger.error('otp email failed', { code: e?.code, command: e?.command })
+    throw badRequest(
+      'We could not send the email just now. Try again in a minute.',
+      'MAIL_SEND_FAILED'
+    )
+  }
 
   // The code is never logged (rule 3). The address is masked.
   logger.info('otp emailed', { to: to.replace(/(.{2}).*(@.*)/, '$1***$2') })

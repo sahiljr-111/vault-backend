@@ -60,13 +60,30 @@ export async function issueOtp({ userId, email, isResend = false, purpose = 'ema
     ? { $set: base, $inc: { resends: 1 } }
     : { $set: { ...base, resends: 0 } }
 
+  /*
+   * SEND FIRST, then record. The order is the fix, not an accident.
+   *
+   * It used to persist and then mail. A failing transport — wrong SMTP
+   * credentials, a revoked app password, a provider outage — therefore still
+   * burned a resend against the cap of `maxResends`, still started the cooldown
+   * and still overwrote whatever code was already pending. Three taps and the
+   * user was hard-blocked by a budget they had spent without ever receiving an
+   * email, which reads as "it keeps failing for no reason".
+   *
+   * This way a send that never left cannot cost the caller anything: nothing is
+   * written, the previous code stays valid, and the retry is immediate.
+   *
+   * The inverse failure — mail delivered, write fails — leaves a code that will
+   * not verify. That is recoverable in one retry, and a Mongo write failing is
+   * far rarer than an SMTP one.
+   */
+  await sendOtpEmail({ to: email, code, ttlMinutes: Math.round(security.otp.ttlMs / 60000) })
+
   await Otp.findOneAndUpdate({ userId, purpose }, update, {
     upsert: true,
     new: true,
     setDefaultsOnInsert: true,
   })
-
-  await sendOtpEmail({ to: email, code, ttlMinutes: Math.round(security.otp.ttlMs / 60000) })
 
   return { expiresAt, resendCooldownMs: security.otp.resendCooldownMs }
 }
