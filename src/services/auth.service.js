@@ -109,6 +109,62 @@ export async function resendCode({ email }) {
   return { sent: true, otpExpiresAt: expiresAt, resendCooldownMs }
 }
 
+/* ------------------------------------------------------------- PIN reset */
+
+/**
+ * Email a code so a signed-in user can set a new PIN without their old one.
+ *
+ * ---------------------------------------------------------------------------
+ * THIS RELEASES NOTHING. It cannot, and must never be changed so that it can.
+ * ---------------------------------------------------------------------------
+ * The PIN does not derive the vault key — it only unwraps a copy of it that is
+ * already on the device (rule 5). So a PIN reset is a LOCAL re-wrap, and the
+ * server's only job here is to confirm the person still controls the verified
+ * address. It returns no key, no salt and no ciphertext.
+ *
+ * That boundary is the whole reason email is safe to use for this. If this
+ * endpoint ever returned key material, email would become a way into the
+ * vault itself, and a mailbox compromise would equal a vault compromise —
+ * exactly what rule 1 exists to prevent.
+ *
+ * Authenticated on purpose: the caller is a device that already holds a valid
+ * session, so there is no address to submit and therefore no way to probe which
+ * addresses exist. The OTP routes for signup need enumeration protection; this
+ * one is immune to the question by construction.
+ */
+export async function requestPinReset({ userId }) {
+  const user = await User.findById(userId)
+  if (!user) throw unauthorized('Please sign in again.', 'SESSION_EXPIRED')
+  // An unverified address cannot be a recovery channel for anything.
+  if (!user.emailVerified) {
+    throw badRequest('Verify your email address first.', 'EMAIL_UNVERIFIED')
+  }
+
+  const { expiresAt, resendCooldownMs } = await issueOtp({
+    userId: user._id,
+    email: user.email,
+    purpose: 'pin-reset',
+    // Every request here is deliberate and user-initiated, so each one obeys the
+    // cooldown and the cap — there is no "first one is free" step like signup.
+    isResend: true,
+  })
+  return { sent: true, email: user.email, otpExpiresAt: expiresAt, resendCooldownMs }
+}
+
+/**
+ * Confirm the code. Returns ok and nothing else — see the note above.
+ *
+ * The client then re-wraps the vault key it already holds in memory under the
+ * new PIN. The server never learns that the PIN changed, because from its side
+ * nothing did.
+ */
+export async function confirmPinReset({ userId, code }) {
+  const user = await User.findById(userId)
+  if (!user) throw unauthorized('Please sign in again.', 'SESSION_EXPIRED')
+  await verifyOtp({ userId: user._id, code, purpose: 'pin-reset' })
+  return { ok: true }
+}
+
 export async function login({ email, password }) {
   const user = await User.findOne({ email }).select(
     '+passwordHash +kdfSalt +verifierCiphertext +verifierIv'

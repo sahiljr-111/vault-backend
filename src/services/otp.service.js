@@ -29,8 +29,8 @@ function generateCode(length) {
  * `isResend` distinguishes the two callers: signup always gets a fresh code,
  * while an explicit resend has to respect the cooldown and the resend cap.
  */
-export async function issueOtp({ userId, email, isResend = false }) {
-  const existing = await Otp.findOne({ userId, purpose: 'email-verify' })
+export async function issueOtp({ userId, email, isResend = false, purpose = 'email-verify' }) {
+  const existing = await Otp.findOne({ userId, purpose })
 
   if (isResend && existing) {
     const since = Date.now() - new Date(existing.lastSentAt).getTime()
@@ -60,7 +60,7 @@ export async function issueOtp({ userId, email, isResend = false }) {
     ? { $set: base, $inc: { resends: 1 } }
     : { $set: { ...base, resends: 0 } }
 
-  await Otp.findOneAndUpdate({ userId, purpose: 'email-verify' }, update, {
+  await Otp.findOneAndUpdate({ userId, purpose }, update, {
     upsert: true,
     new: true,
     setDefaultsOnInsert: true,
@@ -78,8 +78,8 @@ export async function issueOtp({ userId, email, isResend = false }) {
  * expired from wrong from never-issued, because that difference tells an attacker
  * whether an address is registered.
  */
-export async function verifyOtp({ userId, code }) {
-  const record = await Otp.findOne({ userId, purpose: 'email-verify' }).select('+codeHash')
+export async function verifyOtp({ userId, code, purpose = 'email-verify' }) {
+  const record = await Otp.findOne({ userId, purpose }).select('+codeHash')
   if (!record) throw badRequest('That code is not right. Request a new one.', 'OTP_INVALID')
 
   if (record.expiresAt.getTime() < Date.now()) {

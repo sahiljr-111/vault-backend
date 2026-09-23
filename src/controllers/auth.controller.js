@@ -25,6 +25,27 @@ export async function resendCode(req, res, next) {
   }
 }
 
+/*
+ * PIN reset. Both take the user from the SESSION, never from the body — there
+ * is no email field to submit, so nothing here can be used to probe which
+ * addresses exist.
+ */
+export async function requestPinReset(req, res, next) {
+  try {
+    res.json({ data: await authService.requestPinReset({ userId: req.user.id }) })
+  } catch (e) {
+    next(e)
+  }
+}
+
+export async function confirmPinReset(req, res, next) {
+  try {
+    res.json({ data: await authService.confirmPinReset({ userId: req.user.id, code: req.body.code }) })
+  } catch (e) {
+    next(e)
+  }
+}
+
 export async function login(req, res, next) {
   try {
     res.json({ data: await authService.login(req.body) })

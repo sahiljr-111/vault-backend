@@ -17,7 +17,12 @@ import mongoose from 'mongoose'
 const otpSchema = new mongoose.Schema(
   {
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
-    purpose: { type: String, required: true, enum: ['email-verify'], default: 'email-verify' },
+    /*
+     * 'pin-reset' is a SEPARATE document from 'email-verify', which the unique
+     * {userId, purpose} index enforces. Sharing one record would mean asking to
+     * reset a PIN silently invalidated a pending signup code, and vice versa.
+     */
+    purpose: { type: String, required: true, enum: ['email-verify', 'pin-reset'], default: 'email-verify' },
 
     codeHash: { type: String, required: true, select: false },
     expiresAt: { type: Date, required: true },

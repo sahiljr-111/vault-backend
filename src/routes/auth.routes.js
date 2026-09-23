@@ -44,6 +44,11 @@ const emailOnly = z
   .object({ email: z.string().email().max(254).toLowerCase().trim() })
   .strict()
 
+/* PIN reset carries only the code: the account comes from the session. */
+const codeOnly = z
+  .object({ code: z.string().regex(/^\d{4,8}$/, 'numeric code') })
+  .strict()
+
 // Rule 8 — rate limit every credential-accepting surface. The OTP routes are
 // included deliberately: verify is a guessing oracle and resend costs real mail.
 router.post('/signup', mailLimiterPerIp, mailLimiterPerEmail, validate(credentials), authController.signup)
@@ -51,6 +56,15 @@ router.post('/verify-email', otpVerifyLimiter, validate(otpBody), authController
 router.post('/resend-code', mailLimiterPerIp, mailLimiterPerEmail, validate(emailOnly), authController.resendCode)
 router.post('/login', authLimiter, validate(credentials), authController.login)
 router.post('/refresh', authLimiter, validate(refreshBody), authController.refresh)
+
+/*
+ * Rule 8 — a code is a credential, so both halves are limited even though they
+ * already require a session: `request` costs real mail, and `confirm` is a
+ * guessing oracle. The per-IP mail limiter sits in front of the send, and the
+ * OTP verify limiter in front of the check, exactly as on the signup pair.
+ */
+router.post('/pin-reset/request', requireAuth, mailLimiterPerIp, authController.requestPinReset)
+router.post('/pin-reset/confirm', requireAuth, otpVerifyLimiter, validate(codeOnly), authController.confirmPinReset)
 
 router.post('/vault/init', requireAuth, validate(vaultInit), authController.initializeVault)
 router.get('/vault/params', requireAuth, authController.vaultParams)
