@@ -81,6 +81,36 @@ router.post('/refresh', authLimiter, validate(refreshBody), authController.refre
  * whole address. It was also the wrong shape for an authenticated route; see
  * mailLimiterPerUser.
  */
+/* The sealed key, re-wrapped by the client. Shape only — never inspected. */
+const sealedKey = z.object({
+  kdfSalt: z.string().min(1).max(256),
+  wrappedKeyCiphertext: b64,
+  wrappedKeyNonce: b64,
+})
+
+const changePw = sealedKey
+  .extend({
+    currentPassword: z.string().min(1).max(200),
+    newPassword: z.string().min(8, 'at least 8 characters').max(200),
+  })
+  .strict()
+
+const resetPw = sealedKey
+  .extend({
+    resetToken: z.string().min(10).max(2048),
+    newPassword: z.string().min(8, 'at least 8 characters').max(200),
+  })
+  .strict()
+
+/*
+ * Rule 8 again. `forgot` costs mail, `forgot/verify` is a guessing oracle, and
+ * `change` accepts the current password so it is a credential surface too.
+ */
+router.post('/password/change', requireAuth, authLimiter, validate(changePw), authController.changePassword)
+router.post('/password/forgot', mailLimiterPerIp, mailLimiterPerEmail, validate(emailOnly), authController.forgotPassword)
+router.post('/password/forgot/verify', otpVerifyLimiter, validate(otpBody), authController.verifyForgotPassword)
+router.post('/password/reset', authLimiter, validate(resetPw), authController.resetPassword)
+
 router.post('/pin-reset/request', requireAuth, mailLimiterPerUser, authController.requestPinReset)
 router.post('/pin-reset/confirm', requireAuth, otpVerifyLimiter, validate(codeOnly), authController.confirmPinReset)
 

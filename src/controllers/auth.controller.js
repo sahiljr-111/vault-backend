@@ -46,6 +46,30 @@ export async function confirmPinReset(req, res, next) {
   }
 }
 
+export async function changePassword(req, res, next) {
+  try {
+    res.json({ data: await authService.changePassword(req.user.id, req.body) })
+  } catch (e) { next(e) }
+}
+
+export async function forgotPassword(req, res, next) {
+  try {
+    res.json({ data: await authService.forgotPassword(req.body) })
+  } catch (e) { next(e) }
+}
+
+export async function verifyForgotPassword(req, res, next) {
+  try {
+    res.json({ data: await authService.verifyForgotPassword(req.body) })
+  } catch (e) { next(e) }
+}
+
+export async function resetPassword(req, res, next) {
+  try {
+    res.json({ data: await authService.resetPassword(req.body) })
+  } catch (e) { next(e) }
+}
+
 export async function login(req, res, next) {
   try {
     res.json({ data: await authService.login(req.body) })

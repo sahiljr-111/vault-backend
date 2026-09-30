@@ -2,7 +2,13 @@ import crypto from 'node:crypto'
 import bcrypt from 'bcryptjs'
 import { User } from '../models/user.model.js'
 import { AppError, conflict, unauthorized, badRequest } from '../utils/app-error.js'
-import { issueTokens, verifyRefreshToken, hashToken } from './token.service.js'
+import {
+  issueTokens,
+  verifyRefreshToken,
+  hashToken,
+  signResetToken,
+  verifyResetToken,
+} from './token.service.js'
 import { issueOtp, verifyOtp } from './otp.service.js'
 import { security } from '../config/security.js'
 
@@ -316,6 +322,125 @@ export async function refresh({ refreshToken }) {
     }
   )
   return { accessToken: tokens.accessToken, refreshToken: tokens.refreshToken }
+}
+
+/* ------------------------------------------------------- password change */
+
+/**
+ * Change the account password.
+ *
+ * The client sends the vault key already re-sealed under the new password —
+ * the server stores the new blob and the new bcrypt hash, and still never sees
+ * a key or a plaintext vault (rule 1). Nothing is re-encrypted, because the
+ * vault key itself does not change: that is the entire point of wrapping a
+ * random key instead of deriving one.
+ *
+ * The recovery wrapping is deliberately left alone. It seals the SAME key, so
+ * it keeps working after a password change — a recovery code the user wrote
+ * down a year ago must not be silently invalidated by an unrelated action.
+ */
+export async function changePassword(
+  userId,
+  { currentPassword, newPassword, kdfSalt, wrappedKeyCiphertext, wrappedKeyNonce }
+) {
+  const user = await User.findById(userId).select('+passwordHash')
+  if (!user) throw unauthorized()
+
+  const ok = await bcrypt.compare(currentPassword, user.passwordHash)
+  if (!ok) throw unauthorized('That password is not right.', 'BAD_CREDENTIALS')
+
+  await User.updateOne(
+    { _id: userId },
+    {
+      passwordHash: await bcrypt.hash(newPassword, BCRYPT_COST),
+      kdfSalt,
+      wrappedKeyCiphertext,
+      wrappedKeyNonce,
+    }
+  )
+  return { ok: true }
+}
+
+/* ------------------------------------------------------ password recovery */
+
+/**
+ * Step 1: email a code. Unauthenticated, so it stays silent about whether the
+ * address is registered — the same enumeration guard signup uses.
+ */
+export async function forgotPassword({ email }) {
+  const user = await User.findOne({ email })
+  if (!user || !user.emailVerified) {
+    return { sent: true, resendCooldownMs: security.otp.resendCooldownMs }
+  }
+  const { expiresAt, resendCooldownMs } = await issueOtp({
+    userId: user._id,
+    email: user.email,
+    purpose: 'pin-reset',
+    isResend: true,
+  })
+  return { sent: true, otpExpiresAt: expiresAt, resendCooldownMs }
+}
+
+/**
+ * Step 2: the code buys a reset ticket and the RECOVERY-sealed key.
+ *
+ * Handing that blob to whoever controls the mailbox is safe and is the design:
+ * it is sealed under the recovery code, which is not stored here and never was.
+ * So email alone gets you a useless blob, and the recovery code alone gets you
+ * nothing to open — you need both. That is a real second factor, not a
+ * password reset wearing one.
+ */
+export async function verifyForgotPassword({ email, code }) {
+  const user = await User.findOne({ email }).select('+recoverySalt +recoveryCiphertext +recoveryNonce')
+  if (!user) throw badRequest('That code is not right. Request a new one.', 'OTP_INVALID')
+  await verifyOtp({ userId: user._id, code, purpose: 'pin-reset' })
+
+  if (!user.recoveryCiphertext || !user.recoveryNonce || !user.recoverySalt) {
+    throw badRequest('This account has no recovery code set up.', 'NO_RECOVERY')
+  }
+
+  return {
+    resetToken: signResetToken(user._id),
+    recoverySalt: user.recoverySalt,
+    recoveryWrapped: { ciphertext: user.recoveryCiphertext, nonce: user.recoveryNonce },
+  }
+}
+
+/**
+ * Step 3: set the new password and the key re-sealed under it.
+ *
+ * The client got here by opening the recovery wrapping on its own device, so
+ * it is holding the real vault key — which is why this can rotate the password
+ * without touching a single item.
+ */
+export async function resetPassword({ resetToken, newPassword, kdfSalt, wrappedKeyCiphertext, wrappedKeyNonce }) {
+  let payload
+  try {
+    payload = verifyResetToken(resetToken)
+  } catch {
+    throw unauthorized('That link has expired. Start again.', 'RESET_EXPIRED')
+  }
+
+  const user = await User.findById(payload.sub)
+  if (!user) throw unauthorized()
+
+  /* `$set` spelled out rather than relying on Mongoose folding loose keys into
+     one: an update that mixes bare fields with an operator has already produced
+     a 500 in this codebase once (the resends conflict in otp.service). */
+  await User.updateOne(
+    { _id: user._id },
+    {
+      $set: {
+        passwordHash: await bcrypt.hash(newPassword, BCRYPT_COST),
+        kdfSalt,
+        wrappedKeyCiphertext,
+        wrappedKeyNonce,
+      },
+      // Every existing session dies with the password it was issued under.
+      $unset: { refreshTokenHash: 1, prevRefreshTokenHash: 1, prevRefreshAt: 1 },
+    }
+  )
+  return { ok: true }
 }
 
 export async function logout(userId) {
