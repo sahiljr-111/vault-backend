@@ -44,6 +44,20 @@ const userSchema = new mongoose.Schema(
     emailVerified: { type: Boolean, default: false },
 
     refreshTokenHash: { type: String, select: false },
+    /*
+     * The token the current one replaced, honoured for a short grace window.
+     *
+     * Rotation is single-use: refreshing invalidates the old token instantly.
+     * That is the right default, but with no grace period a LOST RESPONSE is
+     * indistinguishable from a stolen token — if the app dies between the server
+     * rotating and the device saving the new pair (an app update, a force-stop,
+     * a dropped connection at the wrong moment), the device is left holding a
+     * token the server has already retired, and the next launch signs the user
+     * out and wipes their PIN. One dropped packet should not cost someone their
+     * device setup.
+     */
+    prevRefreshTokenHash: { type: String, select: false },
+    prevRefreshAt: { type: Date, select: false },
     lastLoginAt: Date,
   },
   { timestamps: true }
@@ -57,6 +71,7 @@ userSchema.set('toJSON', {
     delete ret.verifierCiphertext
     delete ret.verifierIv
     delete ret.refreshTokenHash
+    delete ret.prevRefreshTokenHash
     return ret
   },
 })

@@ -260,18 +260,56 @@ export async function refresh({ refreshToken }) {
     throw unauthorized('Session expired. Please log in again.', 'BAD_REFRESH')
   }
 
-  const user = await User.findById(payload.sub).select('+refreshTokenHash')
-  // Reject a token that isn't the currently-issued one (rotation / revocation).
-  if (!user || user.refreshTokenHash !== hashToken(refreshToken)) {
+  const user = await User.findById(payload.sub).select(
+    '+refreshTokenHash +prevRefreshTokenHash +prevRefreshAt'
+  )
+  const presented = hashToken(refreshToken)
+  const isCurrent = Boolean(user) && user.refreshTokenHash === presented
+
+  /*
+   * The one just replaced is still accepted, briefly.
+   *
+   * Rotation is single-use, which is correct — but with no grace window a LOST
+   * RESPONSE looks exactly like a stolen token. If the client never received
+   * the rotated pair (the app was killed mid-flight by an update or a
+   * force-stop, or the connection dropped), it retries with a token the server
+   * has already retired and gets signed out for it. On this app that also wipes
+   * the device PIN, so a single dropped packet cost the user their whole
+   * device setup and a password re-entry. That is not a security win; it is a
+   * reliability bug wearing security's clothes.
+   *
+   * The window is small and the replay still ROTATES, so the real device and a
+   * thief cannot both keep refreshing — whoever comes second is out.
+   */
+  const isRecentlyRotated =
+    Boolean(user) &&
+    user.prevRefreshTokenHash === presented &&
+    user.prevRefreshAt &&
+    Date.now() - new Date(user.prevRefreshAt).getTime() < security.refreshGraceMs
+
+  if (!user || (!isCurrent && !isRecentlyRotated)) {
     throw unauthorized('Session expired. Please log in again.', 'BAD_REFRESH')
   }
 
   const tokens = issueTokens(user._id)
-  await User.updateOne({ _id: user._id }, { refreshTokenHash: tokens.refreshTokenHash })
+  await User.updateOne(
+    { _id: user._id },
+    {
+      refreshTokenHash: tokens.refreshTokenHash,
+      prevRefreshTokenHash: user.refreshTokenHash,
+      prevRefreshAt: new Date(),
+    }
+  )
   return { accessToken: tokens.accessToken, refreshToken: tokens.refreshToken }
 }
 
 export async function logout(userId) {
-  await User.updateOne({ _id: userId }, { $unset: { refreshTokenHash: 1 } })
+  // The previous hash goes too. Leaving it behind would keep a retired token
+  // working for the rest of the grace window AFTER an explicit sign-out — the
+  // one moment the user has said, out loud, that this device is done.
+  await User.updateOne(
+    { _id: userId },
+    { $unset: { refreshTokenHash: 1, prevRefreshTokenHash: 1, prevRefreshAt: 1 } }
+  )
   return { ok: true }
 }

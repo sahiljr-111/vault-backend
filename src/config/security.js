@@ -12,6 +12,15 @@ const num = (key, fallback) => {
 }
 
 export const security = {
+  /**
+   * How long a just-rotated refresh token keeps working.
+   *
+   * Long enough to cover a retry after a dropped response, short enough that a
+   * stolen token is useless almost immediately. Both replay paths still rotate,
+   * so a thief and the real device cannot both keep refreshing.
+   */
+  refreshGraceMs: num('REFRESH_GRACE_SECONDS', 60) * 1000,
+
   otp: {
     /** 6 digits is the norm users expect; length is here so it can change. */
     length: num('OTP_LENGTH', 6),
