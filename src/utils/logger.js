@@ -10,7 +10,8 @@ import { env } from '../config/env.js'
 const redactKeys = new Set([
   'password', 'masterPassword', 'newPassword', 'token', 'accessToken', 'refreshToken',
   'encryptedData', 'encryptedBlob', 'iv', 'kdfSalt', 'passwordHash',
-  'verifierCiphertext', 'verifierIv', 'authorization',
+  'wrappedKeyCiphertext', 'wrappedKeyNonce', 'recoveryCiphertext', 'recoveryNonce',
+  'recoverySalt', 'recoveryCode', 'authorization',
 ])
 
 function scrub(meta) {

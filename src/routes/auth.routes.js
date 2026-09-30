@@ -30,7 +30,19 @@ const credentials = z
 /** Opaque ciphertext from the client. Base64 shape only — contents never inspected. */
 const b64 = z.string().min(1).max(4096).regex(/^[A-Za-z0-9+/=]+$/, 'base64')
 
-const vaultInit = z.object({ verifierCiphertext: b64, verifierIv: b64 }).strict()
+/*
+ * Shape only. Every field is opaque ciphertext or a public salt — this server
+ * validates that they LOOK like base64 and never looks inside (rule 1).
+ */
+const vaultInit = z
+  .object({
+    wrappedKeyCiphertext: b64,
+    wrappedKeyNonce: b64,
+    recoverySalt: z.string().min(1).max(256),
+    recoveryCiphertext: b64,
+    recoveryNonce: b64,
+  })
+  .strict()
 const refreshBody = z.object({ refreshToken: z.string().min(10).max(2048) }).strict()
 
 /** A code is a credential: shape-checked, and rate limited like a password. */

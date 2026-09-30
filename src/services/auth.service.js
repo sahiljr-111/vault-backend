@@ -69,8 +69,25 @@ export async function signup({ email, password }) {
 }
 
 /** Step 2: a correct code is what turns a parked account into a session. */
+/**
+ * What a client needs to open its vault: the public salt and the sealed key.
+ *
+ * Useless without the password — the blob is AEAD, so a wrong password fails
+ * the tag instead of yielding a key (rule 1). Returned as one shape from every
+ * entry point so the three of them cannot drift apart.
+ */
+function vaultEnvelope(user) {
+  return {
+    kdfSalt: user.kdfSalt,
+    wrappedKey:
+      user.wrappedKeyCiphertext && user.wrappedKeyNonce
+        ? { ciphertext: user.wrappedKeyCiphertext, nonce: user.wrappedKeyNonce }
+        : null,
+  }
+}
+
 export async function verifyEmail({ email, code }) {
-  const user = await User.findOne({ email }).select('+kdfSalt +verifierCiphertext +verifierIv')
+  const user = await User.findOne({ email }).select('+kdfSalt +wrappedKeyCiphertext +wrappedKeyNonce')
   if (!user) throw badRequest('That code is not right. Request a new one.', 'OTP_INVALID')
 
   await verifyOtp({ userId: user._id, code })
@@ -83,11 +100,7 @@ export async function verifyEmail({ email, code }) {
 
   return {
     user: { id: user._id, email: user.email, vaultInitialized: user.vaultInitialized },
-    kdfSalt: user.kdfSalt,
-    verifier:
-      user.verifierCiphertext && user.verifierIv
-        ? { ciphertext: user.verifierCiphertext, iv: user.verifierIv }
-        : null,
+    ...vaultEnvelope(user),
     accessToken,
     refreshToken,
   }
@@ -167,7 +180,7 @@ export async function confirmPinReset({ userId, code }) {
 
 export async function login({ email, password }) {
   const user = await User.findOne({ email }).select(
-    '+passwordHash +kdfSalt +verifierCiphertext +verifierIv'
+    '+passwordHash +kdfSalt +wrappedKeyCiphertext +wrappedKeyNonce'
   )
 
   // Uniform failure: a wrong email and a wrong password are indistinguishable, so
@@ -191,37 +204,45 @@ export async function login({ email, password }) {
   const { accessToken, refreshToken, refreshTokenHash } = issueTokens(user._id)
   await User.updateOne({ _id: user._id }, { refreshTokenHash, lastLoginAt: new Date() })
 
-  // Everything the client needs to derive the key and self-check the master
-  // password — all of it useless to anyone who cannot supply that password.
+  // Everything the client needs to UNWRAP its key — useless to anyone who
+  // cannot supply the password that seals it.
   return {
     user: { id: user._id, email: user.email, vaultInitialized: user.vaultInitialized },
-    kdfSalt: user.kdfSalt,
-    verifier: user.vaultInitialized
-      ? { ciphertext: user.verifierCiphertext, iv: user.verifierIv }
-      : null,
+    ...vaultEnvelope(user),
     accessToken,
     refreshToken,
   }
 }
 
 /**
- * Stores the encrypted master-password canary. Called once, right after signup,
- * by a client that has just derived its vault key.
+ * Stores the sealed vault key, once, right after signup.
  *
- * The two values are opaque ciphertext. The server cannot decrypt them and so
- * still knows nothing about the master password (rule 1).
+ * Both blobs are opaque ciphertext and both salts are public: the server learns
+ * nothing about the password or the recovery code, and cannot open either
+ * wrapping (rule 1). It is a locker, not a keyholder.
  */
-export async function initializeVault(userId, { verifierCiphertext, verifierIv }) {
-  const user = await User.findById(userId).select('+verifierCiphertext')
+export async function initializeVault(
+  userId,
+  { wrappedKeyCiphertext, wrappedKeyNonce, recoverySalt, recoveryCiphertext, recoveryNonce }
+) {
+  const user = await User.findById(userId)
   if (!user) throw unauthorized()
   if (user.vaultInitialized) {
-    // Overwriting the canary would orphan every existing item's key. Refuse.
+    // Overwriting the wrapping would orphan every item encrypted under the key
+    // it seals. There is no undo for that, so refuse rather than merge.
     throw badRequest('Vault is already initialized.', 'VAULT_ALREADY_INIT')
   }
 
   await User.updateOne(
     { _id: userId },
-    { verifierCiphertext, verifierIv, vaultInitialized: true }
+    {
+      wrappedKeyCiphertext,
+      wrappedKeyNonce,
+      recoverySalt,
+      recoveryCiphertext,
+      recoveryNonce,
+      vaultInitialized: true,
+    }
   )
   return { vaultInitialized: true }
 }
@@ -239,17 +260,11 @@ export async function getMe(userId) {
   return { id: user._id, email: user.email, vaultInitialized: Boolean(user.vaultInitialized) }
 }
 
-/** Returns the salt + canary needed to unlock. Requires a valid session. */
+/** The salt + sealed key needed to unlock. Requires a valid session. */
 export async function getVaultParams(userId) {
-  const user = await User.findById(userId).select('+kdfSalt +verifierCiphertext +verifierIv')
+  const user = await User.findById(userId).select('+kdfSalt +wrappedKeyCiphertext +wrappedKeyNonce')
   if (!user) throw unauthorized()
-  return {
-    kdfSalt: user.kdfSalt,
-    vaultInitialized: user.vaultInitialized,
-    verifier: user.vaultInitialized
-      ? { ciphertext: user.verifierCiphertext, iv: user.verifierIv }
-      : null,
-  }
+  return { ...vaultEnvelope(user), vaultInitialized: user.vaultInitialized }
 }
 
 export async function refresh({ refreshToken }) {
